@@ -1,8 +1,8 @@
 from flask import Flask, redirect, url_for
 from flask_login import LoginManager
-from auth.routes import auth_bp
-from threats.routes import threat_bp
-from database.mongo import get_user_by_id
+from .auth.routes import auth_bp
+from .threats.routes import threat_bp
+from .database.mongo import get_user_by_id
 
 
 app = Flask(__name__)
