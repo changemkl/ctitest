@@ -14,5 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Cloud Run 会注入 PORT，因此一定要监听 ${PORT}
-CMD ["bash","-lc","exec gunicorn cti_platform.app:app --bind 0.0.0.0:${PORT} --workers 2 --capture-output --log-level debug"]
-
+CMD ["bash","-lc","python - <<'PY'\nimport traceback, importlib, sys\ntry:\n m = importlib.import_module('cti_platform.app'); print('import OK:', hasattr(m,'app'))\nexcept Exception:\n traceback.print_exc(); sys.exit(1)\nPY\n && exec gunicorn -c /dev/null cti_platform.app:app --bind 0.0.0.0:${PORT} --workers 1 --timeout 120 --log-level debug --capture-output"]
