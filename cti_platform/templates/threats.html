@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>{{ title or 'Threat Intelligence Dashboard' }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <!-- Chart.js & Geo -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-chart-geo@3.9.0/build/index.umd.min.js"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+
+  <style>
+    :root {
+      --primary: #1f2937; --accent: #2563eb; --light: #f3f4f6;
+      --gray: #6b7280; --card-bg: #ffffff;
+    }
+    body { margin:0; font-family:'Segoe UI',sans-serif; background:var(--light); color:var(--primary); }
+    header { background-color:var(--primary); color:#fff; padding:20px; text-align:center; position:relative; }
+    .logout { position:absolute; right:20px; top:20px; background:#ef4444; color:#fff; padding:8px 12px; border-radius:6px; text-decoration:none; }
+    .container { max-width:1200px; margin:20px auto; padding:0 20px; }
+    form.searchbar { display:flex; justify-content:center; margin-bottom:30px; }
+    input[type="text"]{ padding:10px; font-size:16px; border:1px solid #ccc; border-radius:6px 0 0 6px; width:300px; }
+    button { padding:10px 16px; background:var(--accent); color:#fff; border:none; border-radius:0 6px 6px 0; cursor:pointer; }
+    .charts{ display:flex; flex-wrap:wrap; gap:30px; justify-content:space-between; margin-bottom:40px; }
+    .chart-box{ background:var(--card-bg); box-shadow:0 2px 10px rgba(0,0,0,0.05); border-radius:12px; padding:20px; flex:1; min-width:400px; }
+    .threat-card{ background:var(--card-bg); padding:20px; margin-bottom:20px; border-radius:10px; box-shadow:0 2px 8px rgba(0,0,0,0.05); }
+    .threat-card h3{ margin:0 0 10px; }
+    .threat-meta{ color:var(--gray); font-size:14px; }
+    .badge{ display:inline-block; padding:4px 8px; border-radius:999px; font-size:12px; margin-left:6px; border:1px solid rgba(0,0,0,0.08); }
+    .badge-danger{ background:#fee2e2; color:#b91c1c; border-color:#fecaca; }
+    .badge-secondary{ background:#e5e7eb; color:#374151; border-color:#d1d5db; }
+    .ioc-tabs{ margin-top:14px; }
+    .tabs{ display:flex; gap:8px; border-bottom:1px solid #e5e7eb; }
+    .tab-btn{ background:transparent; color:#374151; border:none; padding:10px 12px; cursor:pointer; border-bottom:2px solid transparent; }
+    .tab-btn.active{ border-color:var(--accent); color:var(--accent); }
+    .tab-panel{ display:none; padding:10px 0; }
+    .tab-panel.active{ display:block; }
+    .ioc-list{ list-style:none; margin:0; padding:0; }
+    .ioc-item{ padding:8px 0; border-bottom:1px dashed #eee; }
+    code{ display:block; word-break:break-all; background:#f9fafb; padding:6px 8px; border-radius:6px; border:1px solid #eef2f7; font-size:12px; }
+    .actions{ display:flex; gap:8px; margin-top:10px; }
+    .btn{ padding:8px 12px; background:var(--accent); color:#fff; border:none; border-radius:6px; cursor:pointer; }
+    .btn.outline{ background:#fff; color:#374151; border:1px solid #d1d5db; }
+    .pagination{ display:flex; justify-content:center; gap:10px; margin:30px 0; align-items:center; }
+    .button{ padding:8px 16px; background:var(--accent); color:#fff; text-decoration:none; border-radius:6px; }
+    .button.disabled{ background:#ccc; pointer-events:none; }
+    .role-switch{ display:flex; gap:8px; justify-content:flex-end; margin-bottom:10px; }
+    .role-switch a{ font-size:12px; padding:6px 8px; border:1px solid #d1d5db; border-radius:6px; text-decoration:none; color:#374151; background:#fff; }
+    .role-switch a.active{ background:#eef2ff; color:#3730a3; border-color:#c7d2fe; }
+    .pill{ padding:3px 8px; border-radius:999px; font-size:12px; background:#eef2ff; color:#3730a3; border:1px solid #c7d2fe; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Threat Intelligence Dashboard</h1>
+  <a class="logout" href="{{ url_for('auth.logout') }}">Log out</a>
+</header>
+
+<div class="container">
+  <!-- 搜索 -->
+  <form class="searchbar" method="get" action="">
+    <input type="text" name="search" placeholder="Search by title" value="{{ search or '' }}">
+    <button type="submit">Search</button>
+  </form>
+
+  <!-- 图表 -->
+  <div class="charts">
+    <div class="chart-box">
+      <h3>Threat Sources</h3>
+      <canvas id="sourceChart"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3>Global Threat Heatmap</h3>
+      <canvas id="worldMap" width="600" height="400"></canvas>
+    </div>
+  </div>
+
+  {% if items and items|length %}
+    {% for it in items %}
+      <div class="threat-card"
+           id="card-{{ it.id }}"
+           data-source="{{ it.source|e }}"
+           data-has-ioc="{{ 1 if it.indicator_count>0 else 0 }}">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:12px;">
+          <div>
+            <h3>{{ it.title }}</h3>
+            <div class="threat-meta">
+              <strong>Source:</strong> {{ it.source }}
+              {% if it.published %} | <strong>Published:</strong> {{ it.published }}{% endif %}
+              {% if it.updated_at %} | <strong>Updated:</strong> {{ it.updated_at }}{% endif %}
+            </div>
+          </div>
+          <div>
+            {% for cve in it.cves %}
+              <span class="badge badge-danger">CVE: {{ cve }}</span>
+            {% endfor %}
+            {% if it.indicator_count %}
+              <span class="badge badge-secondary">{{ it.indicator_count }} IOC</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- 正文：统一渲染，前端按角色决定是否截断 -->
+        <div class="mt-2" data-role="content">
+          <div id="content-{{ it.id }}">{{ it.content_html | safe }}</div>
+        </div>
+
+        <!-- IOC Tabs（统一渲染，前端按角色隐藏“Other”） -->
+        <div class="ioc-tabs">
+          <div class="tabs" id="tabs-{{ it.id }}">
+            <button class="tab-btn active" data-target="domain-{{ it.id }}">Domains ({{ it.indicator_groups.domain|length }})</button>
+            <button class="tab-btn" data-target="url-{{ it.id }}">URLs ({{ it.indicator_groups.url|length }})</button>
+            <button class="tab-btn" data-target="other-{{ it.id }}" data-role="tab-other">Other ({{ it.indicator_groups.other|length }})</button>
+          </div>
+
+          <!-- Domains -->
+          <div class="tab-panel active" id="domain-{{ it.id }}">
+            {% if it.indicator_groups.domain and it.indicator_groups.domain|length %}
+              <ul class="ioc-list" id="ioc-domain-{{ it.id }}">
+                {% for ind in it.indicator_groups.domain %}
+                  <li class="ioc-item">
+                    <div style="font-weight:600; font-size:13px;">{{ ind.name }}</div>
+                    <code>{{ ind.pattern }}</code>
+                    {% if ind.valid_from %}<div class="threat-meta">valid_from: {{ ind.valid_from }}</div>{% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="threat-meta">No domain indicators.</div>
+            {% endif %}
+          </div>
+
+          <!-- URLs -->
+          <div class="tab-panel" id="url-{{ it.id }}">
+            {% if it.indicator_groups.url and it.indicator_groups.url|length %}
+              <ul class="ioc-list" id="ioc-url-{{ it.id }}">
+                {% for ind in it.indicator_groups.url %}
+                  <li class="ioc-item">
+                    <div style="font-weight:600; font-size:13px;">{{ ind.name }}</div>
+                    <code>{{ ind.pattern }}</code>
+                    {% if ind.valid_from %}<div class="threat-meta">valid_from: {{ ind.valid_from }}</div>{% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="threat-meta">No URL indicators.</div>
+            {% endif %}
+          </div>
+
+          <!-- Other（统一渲染，前端按角色隐藏） -->
+          <div class="tab-panel" id="other-{{ it.id }}" data-role="panel-other">
+            {% if it.indicator_groups.other and it.indicator_groups.other|length %}
+              <ul class="ioc-list" id="ioc-other-{{ it.id }}">
+                {% for ind in it.indicator_groups.other %}
+                  <li class="ioc-item">
+                    <div style="font-weight:600; font-size:13px;">{{ ind.name }}</div>
+                    <code>{{ ind.pattern }}</code>
+                    {% if ind.valid_from %}<div class="threat-meta">valid_from: {{ ind.valid_from }}</div>{% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="threat-meta">No other indicators.</div>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- 操作区（Raw JSON 统一渲染，前端按角色隐藏内容块） -->
+        <div class="actions">
+          {% if it.url %}
+            <a class="btn" href="{{ it.url }}" target="_blank" rel="noopener">View Source</a>
+          {% endif %}
+          <button class="btn outline" type="button" onclick="toggleRaw('{{ it.id }}')">View Raw JSON</button>
+        </div>
+
+        <div id="raw-{{ it.id }}" style="display:none; margin-top:10px;" data-role="raw-json">
+          <pre class="threat-meta" style="background:#f9fafb; padding:12px; border-radius:8px; border:1px solid #eef2f7;"><code>{{ it | tojson(indent=2) }}</code></pre>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No threat data found.</p>
+  {% endif %}
+
+  <!-- 分页 -->
+  {% set total_pages = (total // size) + (1 if total % size else 0) %}
+  <div class="pagination">
+    {% if page > 1 %}
+      <a class="button"
+         href="?search={{ search or '' }}&page={{ page - 1 }}&size={{ size }}&role_view={{ role_view or '' }}">
+         Previous
+      </a>
+    {% else %}
+      <a class="button disabled">Previous</a>
+    {% endif %}
+  
+    <span>Page {{ page }} / {{ total_pages }}</span>
+  
+    {% if page < total_pages %}
+      <a class="button"
+         href="?search={{ search or '' }}&page={{ page + 1 }}&size={{ size }}&role_view={{ role_view or '' }}">
+         Next
+      </a>
+    {% else %}
+      <a class="button disabled">Next</a>
+    {% endif %}
+  </div>
+  
+
+<script>
+  // 图表数据
+  const sourceStats = {{ source_stats | tojson | safe }};
+  const locationStats = {{ location_stats | tojson | safe }};
+
+  // Threat Sources 柱状图
+  (function() {
+    const ctx1 = document.getElementById("sourceChart").getContext("2d");
+    const labels = Object.keys(sourceStats || {});
+    const values = Object.values(sourceStats || {});
+    new Chart(ctx1, {
+      type: "bar",
+      data: { labels, datasets: [{ label: "Number of Threats", data: values }] },
+      options: { responsive:true, plugins:{ legend:{ display:false } }, scales:{ x:{ ticks:{ autoSkip:true, maxRotation:0 } } } }
+    });
+  })();
+
+  // 世界热力图
+  fetch("https://unpkg.com/world-atlas@2/countries-110m.json")
+    .then(res => res.json())
+    .then(data => {
+      const countries = ChartGeo.topojson.feature(data, data.objects.countries).features;
+      const ctx2 = document.getElementById("worldMap").getContext("2d");
+      new Chart(ctx2, {
+        type: "choropleth",
+        data: {
+          labels: countries.map(d => d.properties.name),
+          datasets: [{
+            label: 'Threats by Country',
+            data: countries.map(country => ({
+              feature: country,
+              value: (locationStats && locationStats[country.properties.name]) || 0
+            }))
+          }]
+        },
+        options: {
+          showOutline: true, showGraticule: true,
+          scales: { xy: { projection: 'equalEarth' }, color: { legend: { position: 'bottom-right' }, quantize: 5, interpolate: d3.interpolateYlOrRd } },
+          plugins: { legend: { display: false } }
+        }
+      });
+    });
+
+  // Tabs 切换
+  document.querySelectorAll('[id^="tabs-"]').forEach(tabbar => {
+    tabbar.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        tabbar.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const cardId = tabbar.id.replace('tabs-','');
+        const container = document.getElementById('card-' + cardId);
+        container.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        const panel = document.getElementById(btn.dataset.target);
+        if(panel) panel.classList.add('active');
+      });
+    });
+  });
+
+  // Raw JSON 切换
+  function toggleRaw(id){
+    const el = document.getElementById('raw-' + id);
+    if(!el) return;
+    el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
+  }
+
+  // ====== 角色可见性（前端实现，无需改后端） ======
+  const roleView = "{{ role_view or 'public' }}";
+  const visibilityRules = {
+  public: { disallowSources: [], requireIOC: false,
+            hideSelectors: ['[data-role=raw-json]','[data-role=tab-other]','[data-role=panel-other]'],
+            truncateContentLines: 6 },
+  pro:   { disallowSources: [], requireIOC: false, hideSelectors: [], truncateContentLines: null },
+  admin: { disallowSources: [], requireIOC: false, hideSelectors: [], truncateContentLines: null }
+};
+
+  (function applyRoleVisibility() {
+    const rules = visibilityRules[roleView] || visibilityRules.public;
+
+    // 1) 过滤整卡（来源、不含 IOC）
+    const cards = document.querySelectorAll('.threat-card');
+    let hiddenCount = 0;
+    cards.forEach(card => {
+      const src = (card.getAttribute('data-source') || '').trim();
+      const hasIOC = card.getAttribute('data-has-ioc') === '1';
+      const blockBySource = rules.disallowSources.includes(src);
+      const blockByIOC = rules.requireIOC && !hasIOC;
+      if (blockBySource || blockByIOC) { card.style.display = 'none'; hiddenCount++; }
+    });
+
+    // 2) 隐藏卡片内部元素
+    (rules.hideSelectors || []).forEach(sel => {
+      document.querySelectorAll(sel).forEach(el => { el.style.display = 'none'; });
+    });
+
+    // 3) 截断正文
+    if (rules.truncateContentLines) {
+      document.querySelectorAll('[data-role="content"] > div').forEach(el => {
+        el.style.display = '-webkit-box';
+        el.style.webkitLineClamp = String(rules.truncateContentLines);
+        el.style.webkitBoxOrient = 'vertical';
+        el.style.overflow = 'hidden';
+      });
+    }
+
+    // 4) 轻量提示（可删）
+    if (hiddenCount > 0) {
+      const container = document.querySelector('.container');
+      const note = document.createElement('div');
+      note.style.cssText = "margin:10px 0; color:#6b7280; font-size:12px;";
+      note.textContent = `${hiddenCount} item(s) hidden by ${roleView} visibility rules.`;
+      container.insertBefore(note, container.firstChild.nextSibling);
+    }
+  })();
+</script>
+</body>
+</html>
