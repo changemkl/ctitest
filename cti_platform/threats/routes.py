@@ -1,7 +1,7 @@
 # cti_platform/threats/routes.py
 from flask import Blueprint, render_template, request, abort
 from flask_login import login_required, current_user
-from database.mongo import db
+from .database.mongo import db
 from collections import Counter
 
 threat_bp = Blueprint("threat", __name__, url_prefix="/threats")
